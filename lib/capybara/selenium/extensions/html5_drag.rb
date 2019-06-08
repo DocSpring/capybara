@@ -10,9 +10,7 @@ class Capybara::Selenium::Node
       if driver.evaluate_script('window.capybara_mousedown_prevented || !arguments[0].draggable', self)
         element.scroll_if_needed { browser_action.move_to(element.native).release.perform }
       else
-        # Split dragging and dropping because some libraries (SortableJS) execute code via setTimeout
-        driver.execute_script START_DRAG_SCRIPT, self
-        driver.execute_script HTML5_DRAG_DROP_SCRIPT, self, element
+        driver.evaluate_async_script HTML5_DRAG_DROP_SCRIPT, self, element
         browser_action.release.perform
       end
     end
@@ -88,28 +86,7 @@ class Capybara::Selenium::Node
       }, { once: true, passive: true })
     JS
 
-    START_DRAG_SCRIPT = <<~JS
-      var source = arguments[0];
-      var dt = new DataTransfer();
-      window.capybara_drag_opts = { cancelable: true, bubbles: true, dataTransfer: dt };
-
-      if (source.tagName == 'A'){
-        dt.setData('text/uri-list', source.href);
-        dt.setData('text', source.href);
-      }
-      if (source.tagName == 'IMG'){
-        dt.setData('text/uri-list', source.src);
-        dt.setData('text', source.src);
-      }
-
-      var dragEvent = new DragEvent('dragstart', window.capybara_drag_opts);
-      source.dispatchEvent(dragEvent);
-    JS
-
     HTML5_DRAG_DROP_SCRIPT = <<~JS
-      var source = arguments[0];
-      var target = arguments[1];
-
       function rectCenter(rect){
         return new DOMPoint(
           (rect.left + rect.right)/2,
@@ -148,31 +125,59 @@ class Capybara::Selenium::Node
         return new DOMPoint(pt.x,pt.y);
       }
 
-      var opts = window.capybara_drag_opts;
+      function dragEnterTarget() {
+        target.scrollIntoView({behavior: 'instant', block: 'center', inline: 'center'});
+        var targetRect = target.getBoundingClientRect();
+        var sourceCenter = rectCenter(source.getBoundingClientRect());
 
-      target.scrollIntoView({behavior: 'instant', block: 'center', inline: 'center'});
-      var targetRect = target.getBoundingClientRect();
-      var sourceCenter = rectCenter(source.getBoundingClientRect());
-
-      // fire 2 dragover events to simulate dragging with a direction
-      var entryPoint = pointOnRect(sourceCenter, targetRect)
-      var dragOverOpts = Object.assign({clientX: entryPoint.x, clientY: entryPoint.y}, opts);
-      var dragOverEvent = new DragEvent('dragover', dragOverOpts);
-      target.dispatchEvent(dragOverEvent);
-
-      var targetCenter = rectCenter(targetRect);
-      dragOverOpts = Object.assign({clientX: targetCenter.x, clientY: targetCenter.y}, opts);
-      dragOverEvent = new DragEvent('dragover', dragOverOpts);
-      target.dispatchEvent(dragOverEvent);
-
-      var dragLeaveEvent = new DragEvent('dragleave', opts);
-      target.dispatchEvent(dragLeaveEvent);
-      if (dragOverEvent.defaultPrevented) {
-        var dropEvent = new DragEvent('drop', opts);
-        target.dispatchEvent(dropEvent);
+        // fire 2 dragover events to simulate dragging with a direction
+        var entryPoint = pointOnRect(sourceCenter, targetRect)
+        var dragOverOpts = Object.assign({clientX: entryPoint.x, clientY: entryPoint.y}, opts);
+        var dragOverEvent = new DragEvent('dragover', dragOverOpts);
+        target.dispatchEvent(dragOverEvent);
+        window.setTimeout(dragOnTarget, 50);
       }
-      var dragEndEvent = new DragEvent('dragend', opts);
-      source.dispatchEvent(dragEndEvent);
+
+      function dragOnTarget() {
+        var targetCenter = rectCenter(target.getBoundingClientRect());
+        var dragOverOpts = Object.assign({clientX: targetCenter.x, clientY: targetCenter.y}, opts);
+        var dragOverEvent = new DragEvent('dragover', dragOverOpts);
+        target.dispatchEvent(dragOverEvent);
+        window.setTimeout(dragLeave, 50, dragOverEvent.defaultPrevented);
+      }
+
+      function dragLeave(drop) {
+        var dragLeaveEvent = new DragEvent('dragleave', opts);
+        target.dispatchEvent(dragLeaveEvent);
+        if (drop) {
+          var dropEvent = new DragEvent('drop', opts);
+          target.dispatchEvent(dropEvent);
+        }
+        var dragEndEvent = new DragEvent('dragend', opts);
+        source.dispatchEvent(dragEndEvent);
+        callback.call(true);
+      }
+
+      var source = arguments[0];
+      var target = arguments[1];
+      var callback = arguments[2];
+
+      var dt = new DataTransfer();
+      var opts = { cancelable: true, bubbles: true, dataTransfer: dt };
+
+      if (source.tagName == 'A'){
+        dt.setData('text/uri-list', source.href);
+        dt.setData('text', source.href);
+      }
+      if (source.tagName == 'IMG'){
+        dt.setData('text/uri-list', source.src);
+        dt.setData('text', source.src);
+      }
+
+      var dragEvent = new DragEvent('dragstart', opts);
+      source.dispatchEvent(dragEvent);
+
+      window.setTimeout(dragEnterTarget, 50);
     JS
   end
 end
